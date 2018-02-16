@@ -1,0 +1,150 @@
+#!/bin/bash
+#
+#  Services Status check and start (run with a cookie or manual)
+#
+#  Copyright (c) 2016 bahv.net
+#
+#  written by Talal S. Al-Khalifa <tools[ @ ]bahv.net>
+#  16/DEC/2016
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+############################################
+### TODO: make a file to check if the service has failed to start an already failed program
+##
+#Path(s) to run scripts like grep, date, services ...
+PATH=$PATH:/usr/bin/:/usr/sbin/:/usr/mybin
+export PATH
+debug='1' # 1 for debug
+#to send email if start fail
+SENDeMail='1' #0 to stop email sending
+EMAIL="email@mysite.com" # email to recive reports on
+#Programs init
+#/etc/init.d not tested
+#SERVICE_INT='/etc/init.d/'
+SERVICE_INT='service ' # Keep the space after the service name
+#Add the program name to be checked
+progs=(postfix dovecot saslauthd amavis clamd spamd apache2 named sshd mysql opendmarc)
+# regex to look to when using grep for running program
+regex='Active\:\sactive\s(running)\ssince\s'
+# regex for the error line at the status
+regexError='(inactive|ERROR\:)'
+#Failed programs log directory
+#FAILED_LOGS='/home/user/dir/'
+function reports {
+    prog=$1
+    STATUS=$($SERVICE_INT$prog status | grep -e $regexError)
+    if [[ -z $STATUS ]]; then
+    STATUS=$($SERVICE_INT$prog status)
+    fi
+    output="
+    $prog report:
+    $STATUS
+    "
+    echo
+    echo -e $output
+}
+#sending email
+function email {
+    if [[ $debug == '1' ]];
+	then
+	echo -e 'At function' $FUNCNAME '()'
+	echo -e ''
+    fi
+    SUBJECT="Service is down"
+    RIGHT_NOW=$(date +"%x %r %Z")
+    ## path to write the temp message to
+    MESSAGE=$(mktemp)
+    SERV=$1
+    local REPORT=$(reports $SERV)
+    #make a temp file to write the message body in
+    echo "Service $SERV is down!" >> $MESSAGE
+    echo "Time: $RIGHT_NOW
+    The service $SERV is down and I can't start it.
+    $REPORT
+    " >> $MESSAGE
+    #send the mail
+    if [[ $debug == '1' ]];
+	then
+	echo -e 'Trying to send email.'
+	echo ''
+    fi
+    mail -s "$SUBJECT" "$EMAIL" < $MESSAGE
+    #deleting the temp file we made
+    rm $MESSAGE
+}
+function startMe {
+    if [[ $debug == '1' ]];
+	then
+	echo 'At function' $FUNCNAME ' ,trying  to start '$1
+	echo
+    fi
+ #trying to start
+ $SERVICE_INT$1 stop >/dev/null 2>&1
+ $SERVICE_INT$1 start >/dev/null 2>&1
+ #sleping 5 then will check the program status
+     if [[ $debug == '1' ]];
+	then
+	echo -e 'Sleeping for 5, and checking the status.'
+	echo
+    fi
+ sleep 5
+ #check the prog status
+ $SERVICE_INT$1 status | grep -ce $regex >/dev/null 2>&1
+ #there is a proplem; send email to admin
+ if [ $? = 1 ]
+        then
+        if [[ $debug == '1' ]];
+	  then
+	   echo -e 'At ' $FUNCNAME '() , and have a problem: ' $1 ' will not start. I will send an email to admin'
+	   echo -e ''
+	   echo -e "Error Line:\n" $($SERVICE_INT $1 status | grep -E "$regexError")
+	   echo -e ''
+	fi
+	##going to email() if the SENDeMail=1 and not in debug mode
+	if [[ $SENDeMail == '0' && $debug == '1' ]];
+	    then
+
+	    echo -e 'Email sending is disapled!'
+
+	fi
+	if [[ $SENDeMail == '1' ]];
+	    then
+	      email $1
+	fi
+  else
+   #We have managed to start the program
+   if [[ $debug == '1' ]];
+      then
+      echo $1 ' is up now. Status Line:( ' $($SERVICE_INT $1 status | grep -e "$regex") ' )'
+      echo ''
+   fi
+ fi
+}
+
+  #we put the programs in an array to check there status
+  for i in "${progs[@]}"
+    do
+      $SERVICE_INT $i status | grep -ce $regex >/dev/null 2>&1
+      #The program working
+      if [ $? = 0 ]
+	then
+	  if [[ $debug == '1' ]]; #working nothing needed
+	    then
+	    echo $i ' working. Status Line:( ' $($SERVICE_INT $i status | grep -e "$regex") ' )'
+            echo ''
+	  fi
+      else
+      #Not working try to restart it
+	  if [[ $debug == '1' ]];
+	      then
+	      echo $i ' is down, will try to restart it... ( going to: startMe() )'
+	      echo ''
+	  fi
+	  #send it to the startme()
+	  startMe $i
+      fi
+    done
+exit
